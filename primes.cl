@@ -8,6 +8,22 @@
      (if (not (,test ans ,result))
        (format t "TEST FAILED: ~A != ~A" ans ,result))))
 
+
+(defmacro f (args &body body)
+  `(labels ((self ,args ,@body))
+     (lambda (&rest args)
+       (apply #'self args))))
+
+(test (apply (f (x)
+                (if (> x 1) (* x (self (- x 1)))
+                  1))
+             '(5))
+      120 eql)
+
+(defun repeat (count val)
+  (loop for i from 1 to count
+        collect val))
+
 ;; In this code I achieve testing if number is prime
 ;; using non-determinitstic programming.
 
@@ -26,15 +42,63 @@
 ;; variables with ambigous values, I have to
 ;; compute all possible combinations…
 
-(defun combinations (l &optional acc)
-  (if (not l) (reverse acc)
-    (combinations 
-      (rest l) 
-      (if (not acc) (loop for x in (first l) collect (list x))
-                    (apply #'append (loop for former in acc
-                          collect (loop for n in (first l)
-                                        collect (cons n former))))))))
+;; @ gets 2 lists. List of combinations and list
+;; of indexes. Returns combination.
 
+(defun @ (l idx)
+  (cond ((numberp idx) (nth idx l))
+        ((listp idx) (loop for i in idx
+                           for x in l
+                           collect (nth i x)))
+        (t (error 'type-error))))
+
+(test (@ '((1 2 3) (4 5 6)) '(0 0))
+      '(1 4) equal)
+
+
+;; @+ gets list of combinations and list of indexes.
+;; Returns next possible combination of indexes or nil
+
+(defun @+ (l idx &optional acc)
+  (if (or (not idx) (not l)) (return-from @+ nil))
+
+  (let ((nl (first l))
+        (ni (+ 1 (first idx))))
+    (if (< ni (length nl))
+      (append acc (cons ni (rest idx)))
+      (@+ (rest l) (rest idx)
+          (append acc (list 0))))))
+
+(test (let ((ls '((1 2 3) (4 5 6)))
+             (idx '(0 0)))
+         (loop for x = (@+ ls idx)
+               while x
+               collect (setf idx x)))
+      '((1 0) (2 0) (0 1) (1 1) (2 1) (0 2) (1 2) (2 2))
+      equal)
+
+
+;; select takes list of combinations and function.
+;; Function is applied to each combination.
+;; Return list of all non-nil results.
+
+(defun select (combos fun)
+  (let ((idx (repeat (length combos) 0)))
+    (apply (f (idx &optional acc)
+              (if (not idx) (return-from self acc))
+
+              (let ((ans (apply fun (@ combos idx))))
+                (self (@+ combos idx)
+                      (if ans (append acc (list (@ combos idx)))
+                              acc))))
+           (list idx))))
+
+(test (select '((1 2 3) (3 4 5) (6 7 8))
+               (f (a b c) (> (+ a b c) 12)))
+    '((3 4 6) (2 5 6) (3 5 6) (3 3 7) (2 4 7) (3 4 7)
+      (1 5 7) (2 5 7) (3 5 7) (2 3 8) (3 3 8) (1 4 8)
+      (2 4 8) (3 4 8) (1 5 8) (2 5 8) (3 5 8))
+    equal)
 
 ;; For each set of possible values I want to put them back
 ;; to original form
@@ -69,12 +133,8 @@
 ;; those possible values that meet condition
 
 (defun must-have (condition)
-  (let ((combos (combinations (grep-choices condition))))
-    (reduce (lambda (a v)
-              (let ((ans (eval (merge-choices condition v))))
-                (if ans (cons v a) a)))
-            combos
-            :initial-value nil)))
+  (select (grep-choices condition)
+          (f (&rest x) (eval (merge-choices condition x)))))
 
 
 ;; Some tests…
@@ -85,16 +145,10 @@
 (test (grep-choices '(= (+ (choice-of 1) (choice-of 2 3))))
      '((2 3) (1)) equal)
 
-(test (combinations '((1 2 3) (4 5 6) (7 8 9)))
-      '((9 6 3) (8 6 3) (7 6 3) (9 5 3) (8 5 3) (7 5 3) (9 4 3) (8 4 3) (7 4 3)
-        (9 6 2) (8 6 2) (7 6 2) (9 5 2) (8 5 2) (7 5 2) (9 4 2) (8 4 2) (7 4 2)
-        (9 6 1) (8 6 1) (7 6 1) (9 5 1) (8 5 1) (7 5 1) (9 4 1) (8 4 1) (7 4 1))
-      equal)
-
 (test (let ((a (choice 1 2 3))
              (b (choice 4 5 6)))
          (must-have `(= (+ ,a ,b) 5)))
-      '((1 4)) equal)
+      '((4 1)) equal)
 
 (test (let ((a (choice 2 3 4))
              (b (choice 8 1 1))
@@ -122,3 +176,11 @@
 (print (prime? 73)) ; T
 (print (prime? 111)); NIL (3 and 37)
 (print (prime? 199)); T
+
+(defun coins (sum)
+  (let ((coin (choice 0.01 0.02 0.05 0.1 0.2 0.5 1 2 5)))
+    (loop for count from 1
+          do (let ((combos (must-have `(= ,sum (+ ,@(repeat count coin))))))
+               (if combos (return-from coins combos))))))
+
+(print (coins 1.12))
